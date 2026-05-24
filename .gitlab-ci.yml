@@ -1,0 +1,49 @@
+stages:
+  - build
+  - deploy
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE/connecto
+
+build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.14.0-debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - |
+      echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context $CI_PROJECT_DIR
+      --dockerfile $CI_PROJECT_DIR/Dockerfile
+      --destination $IMAGE_NAME:$CI_COMMIT_SHORT_SHA
+      --destination $IMAGE_NAME:latest
+      --cache=true
+  only:
+    - merge_requests
+    - master
+    - main
+
+deploy:
+  stage: deploy
+  image: alpine:3.18
+  before_script:
+    - apk add --no-cache openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$DEPLOY_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts
+  script:
+    - |
+      ssh $DEPLOY_USER@$DEPLOY_HOST "
+        docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY &&
+        docker pull $IMAGE_NAME:latest &&
+        docker stop connecto || true &&
+        docker rm connecto || true &&
+        docker run -d --name connecto -p 80:3000 --restart always $IMAGE_NAME:latest
+      "
+  only:
+    - master
+    - main
+  when: manual
